@@ -1,0 +1,174 @@
+from kubernetes import client
+from kubernetes.client.rest import ApiException
+
+from .config import settings
+
+# Every worker pod keeps `app: taskvine-worker` (in addition to the per-user
+# label below) so the existing singleuser NetworkPolicy - which allows
+# ingress to port 9123 from pods matching `app: taskvine-worker`
+# (clusters/*/infrastructure/jupyterhub/install/patch-taskvine.yaml) - keeps
+# working unmodified for gateway-created pools.
+WORKER_APP_LABEL = "taskvine-worker"
+USER_LABEL = "taskvine.rp1/user"
+
+
+def manager_service_name(username: str) -> str:
+    return settings.manager_service_name_template.format(username=username)
+
+
+def worker_statefulset_name(username: str) -> str:
+    return settings.worker_statefulset_name_template.format(username=username)
+
+
+def shared_data_pvc_name(username: str) -> str:
+    return settings.shared_data_pvc_template.format(username=username)
+
+
+def ensure_manager_service(api: client.CoreV1Api, username: str) -> None:
+    """Get-or-create the Service that gives a stable DNS name to a user's
+    notebook pod (z2jh does not create one - see service-manager-arosberg.yaml)."""
+    name = manager_service_name(username)
+    try:
+        api.read_namespaced_service(name, settings.namespace)
+        return
+    except ApiException as e:
+        if e.status != 404:
+            raise
+
+    body = client.V1Service(
+        metadata=client.V1ObjectMeta(name=name, labels={USER_LABEL: username}),
+        spec=client.V1ServiceSpec(
+            selector={"hub.jupyter.org/username": username},
+            ports=[client.V1ServicePort(name="taskvine-manager", port=settings.manager_port, target_port=settings.manager_port)],
+        ),
+    )
+    try:
+        api.create_namespaced_service(settings.namespace, body)
+    except ApiException as e:
+        if e.status != 409:
+            raise
+
+
+def _worker_statefulset_body(username: str, replicas: int) -> client.V1StatefulSet:
+    name = worker_statefulset_name(username)
+    manager_host = f"{manager_service_name(username)}.{settings.namespace}.svc.cluster.local"
+    labels = {"app": WORKER_APP_LABEL, USER_LABEL: username}
+
+    pixi_install = client.V1Container(
+        name="pixi-install",
+        image=settings.worker_image,
+        command=["/bin/sh", "-c"],
+        args=[
+            "set -e\n"
+            "cp /pixi-config/pixi.toml /workspace/pixi.toml\n"
+            "pixi install --manifest-path /workspace/pixi.toml"
+        ],
+        volume_mounts=[
+            client.V1VolumeMount(name="pixi-config", mount_path="/pixi-config"),
+            client.V1VolumeMount(name="workspace", mount_path="/workspace"),
+        ],
+        resources=client.V1ResourceRequirements(
+            requests={"cpu": "250m", "memory": "512Mi"},
+            limits={"cpu": "500m", "memory": "512Mi"},
+        ),
+    )
+
+    vine_worker = client.V1Container(
+        name="vine-worker",
+        image=settings.worker_image,
+        command=["/bin/sh", "-c"],
+        args=[
+            "set -e\n"
+            'eval "$(pixi shell-hook --manifest-path /workspace/pixi.toml --shell bash)"\n'
+            "exec vine_worker --cores=1 --memory=2000 --disk=4000 "
+            "--connect-timeout=900 --idle-timeout=86400 "
+            '"$MANAGER_HOST" "$MANAGER_PORT"'
+        ],
+        env=[
+            client.V1EnvVar(name="MANAGER_HOST", value=manager_host),
+            client.V1EnvVar(name="MANAGER_PORT", value=str(settings.manager_port)),
+        ],
+        resources=client.V1ResourceRequirements(
+            requests={"cpu": settings.worker_cpu, "memory": settings.worker_memory},
+            limits={"cpu": settings.worker_cpu, "memory": settings.worker_memory},
+        ),
+        volume_mounts=[
+            client.V1VolumeMount(name="workspace", mount_path="/workspace"),
+            client.V1VolumeMount(name="shared-data", mount_path="/workspace/shared"),
+        ],
+    )
+
+    pod_spec = client.V1PodSpec(
+        init_containers=[pixi_install],
+        containers=[vine_worker],
+        volumes=[
+            client.V1Volume(name="pixi-config", config_map=client.V1ConfigMapVolumeSource(name=settings.worker_pixi_configmap)),
+            client.V1Volume(
+                name="shared-data",
+                persistent_volume_claim=client.V1PersistentVolumeClaimVolumeSource(claim_name=shared_data_pvc_name(username)),
+            ),
+        ],
+    )
+
+    workspace_pvc = client.V1PersistentVolumeClaim(
+        metadata=client.V1ObjectMeta(name="workspace"),
+        spec=client.V1PersistentVolumeClaimSpec(
+            access_modes=["ReadWriteOnce"],
+            storage_class_name=settings.worker_workspace_storage_class,
+            resources=client.V1ResourceRequirements(requests={"storage": settings.worker_workspace_storage_size}),
+        ),
+    )
+
+    return client.V1StatefulSet(
+        metadata=client.V1ObjectMeta(name=name, labels=labels),
+        spec=client.V1StatefulSetSpec(
+            service_name=WORKER_APP_LABEL,
+            replicas=replicas,
+            selector=client.V1LabelSelector(match_labels={"app": WORKER_APP_LABEL, USER_LABEL: username}),
+            template=client.V1PodTemplateSpec(metadata=client.V1ObjectMeta(labels=labels), spec=pod_spec),
+            volume_claim_templates=[workspace_pvc],
+        ),
+    )
+
+
+def ensure_worker_pool(apps_api: client.AppsV1Api, core_api: client.CoreV1Api, username: str, replicas: int) -> client.V1StatefulSet:
+    if not 0 <= replicas <= settings.max_workers_per_user:
+        raise ValueError(f"replicas must be between 0 and {settings.max_workers_per_user}")
+
+    ensure_manager_service(core_api, username)
+
+    name = worker_statefulset_name(username)
+    try:
+        existing = apps_api.read_namespaced_stateful_set(name, settings.namespace)
+        existing.spec.replicas = replicas
+        return apps_api.patch_namespaced_stateful_set(name, settings.namespace, existing)
+    except ApiException as e:
+        if e.status != 404:
+            raise
+
+    body = _worker_statefulset_body(username, replicas)
+    return apps_api.create_namespaced_stateful_set(settings.namespace, body)
+
+
+def get_worker_pool(apps_api: client.AppsV1Api, username: str) -> client.V1StatefulSet | None:
+    try:
+        return apps_api.read_namespaced_stateful_set(worker_statefulset_name(username), settings.namespace)
+    except ApiException as e:
+        if e.status == 404:
+            return None
+        raise
+
+
+def delete_worker_pool(apps_api: client.AppsV1Api, core_api: client.CoreV1Api, username: str) -> None:
+    name = worker_statefulset_name(username)
+    try:
+        apps_api.delete_namespaced_stateful_set(name, settings.namespace, propagation_policy="Foreground")
+    except ApiException as e:
+        if e.status != 404:
+            raise
+
+    try:
+        core_api.delete_namespaced_service(manager_service_name(username), settings.namespace)
+    except ApiException as e:
+        if e.status != 404:
+            raise
