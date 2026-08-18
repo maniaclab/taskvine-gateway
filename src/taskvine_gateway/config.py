@@ -49,5 +49,13 @@ class Settings(BaseSettings):
 
     max_workers_per_user: int = 20
 
+    # Idle-pool reaper: periodically asks each pool's manager (the same
+    # "manager_status" query `vine_status` uses - a plain TCP line, see
+    # idle.py) whether it has any waiting/running tasks. If a pool has had
+    # none for idle_timeout_seconds straight, it's scaled to 0 replicas.
+    idle_reaper_enabled: bool = True
+    idle_check_interval_seconds: int = 60
+    idle_timeout_seconds: int = 3600
+
 
 settings = Settings()

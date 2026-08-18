@@ -1,12 +1,14 @@
+import asyncio
+from contextlib import asynccontextmanager
+
 from fastapi import Depends, FastAPI, HTTPException
 from kubernetes import client, config
 
 from . import k8s
 from .auth import get_username
 from .config import settings
+from .idle import idle_reaper_loop
 from .models import PoolStatus, ScaleRequest
-
-app = FastAPI(title="taskvine-gateway")
 
 
 def _load_kube_config() -> None:
@@ -19,6 +21,19 @@ def _load_kube_config() -> None:
 _load_kube_config()
 apps_api = client.AppsV1Api()
 core_api = client.CoreV1Api()
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    reaper_task = asyncio.create_task(idle_reaper_loop(apps_api)) if settings.idle_reaper_enabled else None
+    try:
+        yield
+    finally:
+        if reaper_task is not None:
+            reaper_task.cancel()
+
+
+app = FastAPI(title="taskvine-gateway", lifespan=lifespan)
 
 
 def _status_from(statefulset) -> PoolStatus:
