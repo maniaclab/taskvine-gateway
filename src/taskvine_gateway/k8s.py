@@ -80,7 +80,7 @@ def _worker_statefulset_body(username: str, replicas: int) -> client.V1StatefulS
         args=[
             "set -e\n"
             'eval "$(pixi shell-hook --manifest-path /workspace/pixi.toml --shell bash)"\n'
-            "exec vine_worker --cores=1 --memory=2000 --disk=4000 "
+            f"exec vine_worker --cores={settings.worker_cores} --memory={settings.worker_memory_mb} --disk={settings.worker_disk_mb} "
             "--connect-timeout=900 --idle-timeout=86400 "
             '"$MANAGER_HOST" "$MANAGER_PORT"'
         ],
@@ -89,8 +89,8 @@ def _worker_statefulset_body(username: str, replicas: int) -> client.V1StatefulS
             client.V1EnvVar(name="MANAGER_PORT", value=str(settings.manager_port)),
         ],
         resources=client.V1ResourceRequirements(
-            requests={"cpu": settings.worker_cpu, "memory": settings.worker_memory},
-            limits={"cpu": settings.worker_cpu, "memory": settings.worker_memory},
+            requests={"cpu": str(settings.worker_cores), "memory": f"{settings.worker_memory_mb}Mi"},
+            limits={"cpu": str(settings.worker_cores), "memory": f"{settings.worker_memory_mb}Mi"},
         ),
         volume_mounts=[
             client.V1VolumeMount(name="workspace", mount_path="/workspace"),

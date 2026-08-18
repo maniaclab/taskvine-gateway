@@ -31,8 +31,16 @@ class Settings(BaseSettings):
 
     manager_port: int = 9123
 
-    worker_cpu: str = "1"
-    worker_memory: str = "2Gi"
+    # Single source of truth for a worker's resources, in the units
+    # vine_worker's own --cores/--memory/--disk flags expect (whole cores,
+    # MB). The k8s container's resources.requests/limits are derived from
+    # these same values (see k8s.py) so what's advertised to the manager
+    # always matches what the pod is actually allocated - request == limit
+    # (Guaranteed QoS) for the same reason dask-gateway's workers do here:
+    # so a worker pod can't balloon past its declared footprint.
+    worker_cores: int = 1
+    worker_memory_mb: int = 2000
+    worker_disk_mb: int = 4000
 
     # Naming templates - {username} is substituted by str.format.
     manager_service_name_template: str = "taskvine-manager-{username}"
