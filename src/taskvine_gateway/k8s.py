@@ -98,25 +98,38 @@ def _worker_statefulset_body(username: str, replicas: int) -> client.V1StatefulS
         ],
     )
 
+    volumes = [
+        client.V1Volume(name="pixi-config", config_map=client.V1ConfigMapVolumeSource(name=settings.worker_pixi_configmap)),
+        client.V1Volume(
+            name="shared-data",
+            persistent_volume_claim=client.V1PersistentVolumeClaimVolumeSource(claim_name=shared_data_pvc_name(username)),
+        ),
+    ]
+
+    volume_claim_templates = None
+    if settings.worker_workspace_kind == "emptydir":
+        volumes.append(
+            client.V1Volume(
+                name="workspace",
+                empty_dir=client.V1EmptyDirVolumeSource(size_limit=settings.worker_workspace_size_limit),
+            )
+        )
+    else:
+        volume_claim_templates = [
+            client.V1PersistentVolumeClaim(
+                metadata=client.V1ObjectMeta(name="workspace"),
+                spec=client.V1PersistentVolumeClaimSpec(
+                    access_modes=["ReadWriteOnce"],
+                    storage_class_name=settings.worker_workspace_storage_class,
+                    resources=client.V1ResourceRequirements(requests={"storage": settings.worker_workspace_storage_size}),
+                ),
+            )
+        ]
+
     pod_spec = client.V1PodSpec(
         init_containers=[pixi_install],
         containers=[vine_worker],
-        volumes=[
-            client.V1Volume(name="pixi-config", config_map=client.V1ConfigMapVolumeSource(name=settings.worker_pixi_configmap)),
-            client.V1Volume(
-                name="shared-data",
-                persistent_volume_claim=client.V1PersistentVolumeClaimVolumeSource(claim_name=shared_data_pvc_name(username)),
-            ),
-        ],
-    )
-
-    workspace_pvc = client.V1PersistentVolumeClaim(
-        metadata=client.V1ObjectMeta(name="workspace"),
-        spec=client.V1PersistentVolumeClaimSpec(
-            access_modes=["ReadWriteOnce"],
-            storage_class_name=settings.worker_workspace_storage_class,
-            resources=client.V1ResourceRequirements(requests={"storage": settings.worker_workspace_storage_size}),
-        ),
+        volumes=volumes,
     )
 
     return client.V1StatefulSet(
@@ -126,7 +139,7 @@ def _worker_statefulset_body(username: str, replicas: int) -> client.V1StatefulS
             replicas=replicas,
             selector=client.V1LabelSelector(match_labels={"app": WORKER_APP_LABEL, USER_LABEL: username}),
             template=client.V1PodTemplateSpec(metadata=client.V1ObjectMeta(labels=labels), spec=pod_spec),
-            volume_claim_templates=[workspace_pvc],
+            volume_claim_templates=volume_claim_templates,
         ),
     )
 

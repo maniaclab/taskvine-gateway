@@ -1,3 +1,5 @@
+from typing import Literal
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -12,9 +14,18 @@ class Settings(BaseSettings):
     worker_image: str = "ghcr.io/prefix-dev/pixi:0.76.1"
     worker_pixi_configmap: str = "taskvine-worker-pixi"
 
-    # Per-cluster storage classes - these differ across clusters (e.g.
-    # odf-ceph-rbd vs iu-ceph-block) so must be set via env in the cluster
-    # overlay, not left at these defaults.
+    # "emptydir" (default) matches how dask-gateway's own workers handle
+    # scratch here - no PVC at all, just local ephemeral storage, since
+    # worker scratch is disposable and doesn't need Ceph-backed persistence.
+    # It also avoids a per-replica Ceph RBD PVC create/delete on every scale
+    # event. "pvc" is available for clusters/workloads that need scratch to
+    # survive a pod restart or need more space than local node disk offers.
+    worker_workspace_kind: Literal["emptydir", "pvc"] = "emptydir"
+    worker_workspace_size_limit: str = "5Gi"
+
+    # Only used when worker_workspace_kind == "pvc". Storage classes differ
+    # across clusters (e.g. odf-ceph-rbd vs iu-ceph-block) so must be set via
+    # env in the cluster overlay, not left at this default.
     worker_workspace_storage_class: str = "REPLACE_ME"
     worker_workspace_storage_size: str = "5Gi"
 
