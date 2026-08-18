@@ -7,6 +7,8 @@ name = "taskvine-gateway"
 version = "0.1.0"
 description = "Self-service TaskVine worker pools on Kubernetes, authenticated via JupyterHub."
 readme = "README.md"
+license = "BSD-3-Clause"
+license-files = ["LICENSE"]
 requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.115",
