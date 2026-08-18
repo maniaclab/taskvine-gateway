@@ -6,21 +6,6 @@ Kubernetes, authenticated as themselves via their existing JupyterHub API
 token - the same trust model [dask-gateway](https://gateway.dask.org/) uses
 for Dask (`gateway.auth.type: jupyterhub`).
 
-Deployed as part of [rp1-core](https://github.com/maniaclab/rp1-core); see
-that repo's `infrastructure/taskvine-gateway/` and
-`clusters/<cluster>/infrastructure/taskvine-gateway/`.
-
-## Why not `vine_factory --batch-type k8s`?
-
-cctools ships a Kubernetes batch driver
-(`batch_job/src/batch_queue_k8s.c`), but it's marked experimental, shells
-out to `kubectl` per job, and its polling loop uses `kubectl get pods
---show-all`, a flag removed from kubectl since ~1.10. Rather than build on
-that, this service manages per-user `StatefulSet`/`Service` pairs directly
-via the Kubernetes Python client - the same shape as the hand-built
-single-user prototype it replaces
-(`clusters/odf/infrastructure/taskvine-workers/`).
-
 ## API
 
 Every request must carry `Authorization: token <JUPYTERHUB_API_TOKEN>` -
@@ -55,7 +40,7 @@ hub:
 ```
 
 with a `JUPYTERHUB_API_TOKEN`/`JUPYTERHUB_API_URL` pair injected into this
-service's own pod (see rp1-core's cluster overlay).
+service's own pod.
 
 ## Running locally
 
