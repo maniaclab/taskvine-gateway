@@ -25,7 +25,7 @@ core_api = client.CoreV1Api()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    reaper_task = asyncio.create_task(idle_reaper_loop(apps_api)) if settings.idle_reaper_enabled else None
+    reaper_task = asyncio.create_task(idle_reaper_loop(apps_api, core_api)) if settings.idle_reaper_enabled else None
     try:
         yield
     finally:

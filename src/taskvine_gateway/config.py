@@ -57,5 +57,11 @@ class Settings(BaseSettings):
     idle_check_interval_seconds: int = 60
     idle_timeout_seconds: int = 3600
 
+    # Once a pool has been scaled to 0 replicas, it's kept around at 0 (a
+    # cheap resume via patch, not a fresh create) until it's sat idle at
+    # zero for this long, after which the StatefulSet/Service are deleted
+    # entirely. Default: 24h grace window before full teardown.
+    delete_after_zero_seconds: int = 86400
+
 
 settings = Settings()
