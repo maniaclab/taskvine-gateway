@@ -17,14 +17,68 @@ client input, so a caller can only ever affect their own pool.
 - `GET /pools/me` - status (desired vs ready replicas, manager address)
 - `DELETE /pools/me` - tear down
 
+### Scaling from a notebook
+
+```bash
+pip install taskvine-gateway
+```
+
+installs just the client (`taskvine_gateway.TaskVineCluster`) - it's
+stdlib-only, so this doesn't pull in the gateway's own server-side
+dependencies. It reads `TASKVINE_GATEWAY_ADDRESS` and
+`JUPYTERHUB_API_TOKEN` from the environment by default, both of which the
+Hub already injects into every singleuser pod, so no configuration is
+needed from inside a notebook:
+
+```python
+from taskvine_gateway import TaskVineCluster
+
+cluster = TaskVineCluster()
+cluster.scale(10)          # creates the pool on first call
+cluster.status()           # {'username': ..., 'desired_replicas': 10, 'ready_replicas': 3, ...}
+
+# Not required - an idle pool is scaled to 0 and eventually deleted on its
+# own (see "Idle pools" below) - but this is immediate if you're done for
+# sure. Also works as a context manager: `with TaskVineCluster() as cluster:`.
+cluster.close()
+```
+
+## Idle pools
+
+A background loop periodically asks each pool's manager - the same
+`manager_status` query [`vine_status`](https://ccl.cse.nd.edu/software/manuals/vine_status.html)
+uses - whether it has any waiting or running tasks. A pool with neither for
+`TVG_IDLE_TIMEOUT_SECONDS` (default 1h, matching dask-gateway's own
+`idle_timeout` here) is scaled to 0 replicas; an unreachable manager (e.g.
+the notebook itself has shut down) counts the same as idle. A pool sitting
+at 0 replicas for `TVG_DELETE_AFTER_ZERO_SECONDS` (default 24h) has its
+`StatefulSet`/`Service` deleted entirely, rather than kept around
+indefinitely - scaling back up before then is a cheap patch to the
+existing objects; after, it's a fresh create.
+
+## Worker resources and scratch space
+
+`TVG_WORKER_CORES` / `TVG_WORKER_MEMORY_MB` / `TVG_WORKER_DISK_MB` are the
+single source of truth for a worker's footprint - they set both the
+`vine_worker --cores/--memory/--disk` flags and the pod's k8s
+`resources.requests/limits` (request == limit, so a worker can't balloon
+past what it advertises to the manager).
+
+Worker scratch space (`/workspace`, where `vine_worker` unpacks its own
+environment and any per-task working directories) defaults to an
+`emptyDir` - deliberately not persistent, the same way dask-gateway's own
+workers use local ephemeral storage rather than a volume. Set
+`TVG_WORKER_WORKSPACE_KIND=pvc` (plus `TVG_WORKER_WORKSPACE_STORAGE_CLASS`
+and `TVG_WORKER_WORKSPACE_STORAGE_SIZE`) if a deployment needs scratch to
+survive a pod restart or needs more space than local node disk offers.
+
 ## Configuration
 
-Env vars (prefix `TVG_`), see `src/taskvine_gateway/config.py`. Per-cluster
-values that must be overridden (they vary across rp1-dev/rp1/odf, mirroring
-`patch-storage.yaml`'s differing storage classes):
-
-- `TVG_WORKER_WORKSPACE_STORAGE_CLASS` - e.g. `odf-ceph-rbd`, `iu-ceph-block`
-- `TVG_NAMESPACE` - defaults to `jupyterhub`
+Env vars (prefix `TVG_`); see `src/taskvine_gateway/config.py` for the full
+list and defaults. Values that are genuinely deployment-specific and
+should be set by whoever deploys this (storage classes, resource limits,
+timeouts, etc. all vary by cluster and workload) rather than left at their
+defaults.
 
 ## Required JupyterHub-side wiring
 
@@ -40,13 +94,13 @@ hub:
 ```
 
 with a `JUPYTERHUB_API_TOKEN`/`JUPYTERHUB_API_URL` pair injected into this
-service's own pod.
+service's own pod, and `TASKVINE_GATEWAY_ADDRESS` injected into singleuser
+pods for the snippet above.
 
-## Running locally
+## Running the server locally
 
 ```bash
-pip install -e .
+pip install -e ".[server]"
 export JUPYTERHUB_API_TOKEN=... JUPYTERHUB_API_URL=...
-export TVG_WORKER_WORKSPACE_STORAGE_CLASS=standard
 taskvine-gateway
 ```

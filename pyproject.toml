@@ -10,7 +10,15 @@ readme = "README.md"
 license = "BSD-3-Clause"
 license-files = ["LICENSE"]
 requires-python = ">=3.11"
-dependencies = [
+# The client (taskvine_gateway.client / TaskVineCluster) is stdlib-only -
+# safe to `pip install taskvine-gateway` in a notebook environment without
+# pulling in the server's own dependencies. The server needs the `server`
+# extra (that's what the deployed gateway installs - see rp1-core's
+# infrastructure/taskvine-gateway/pixi.toml).
+dependencies = []
+
+[project.optional-dependencies]
+server = [
     "fastapi>=0.115",
     "uvicorn[standard]>=0.30",
     "kubernetes>=30.1",
