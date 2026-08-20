@@ -47,6 +47,12 @@ class Settings(BaseSettings):
     worker_statefulset_name_template: str = "taskvine-worker-{username}"
     shared_data_pvc_template: str = "shared-data-{username}"
 
+    # Mounted into every worker alongside the notebook's own mount of the
+    # same PVC, at the same path, so a path a user writes from the notebook
+    # resolves identically inside a task running on a worker. Must match
+    # whatever mountPath the notebook side actually uses for this PVC.
+    shared_data_mount_path_template: str = "/data/{username}"
+
     max_workers_per_user: int = 20
 
     # Idle-pool reaper: periodically asks each pool's manager (the same

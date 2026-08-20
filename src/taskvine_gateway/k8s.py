@@ -9,7 +9,7 @@ from .config import settings
 # (clusters/*/infrastructure/jupyterhub/install/patch-taskvine.yaml) - keeps
 # working unmodified for gateway-created pools.
 WORKER_APP_LABEL = "taskvine-worker"
-USER_LABEL = "taskvine.rp1/user"
+USER_LABEL = "taskvine-gateway/user"
 
 
 def manager_service_name(username: str) -> str:
@@ -22,6 +22,10 @@ def worker_statefulset_name(username: str) -> str:
 
 def shared_data_pvc_name(username: str) -> str:
     return settings.shared_data_pvc_template.format(username=username)
+
+
+def shared_data_mount_path(username: str) -> str:
+    return settings.shared_data_mount_path_template.format(username=username)
 
 
 def ensure_manager_service(api: client.CoreV1Api, username: str) -> None:
@@ -94,7 +98,7 @@ def _worker_statefulset_body(username: str, replicas: int) -> client.V1StatefulS
         ),
         volume_mounts=[
             client.V1VolumeMount(name="workspace", mount_path="/workspace"),
-            client.V1VolumeMount(name="shared-data", mount_path="/workspace/shared"),
+            client.V1VolumeMount(name="shared-data", mount_path=shared_data_mount_path(username)),
         ],
     )
 
