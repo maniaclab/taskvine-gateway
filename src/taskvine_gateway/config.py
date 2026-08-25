@@ -9,10 +9,10 @@ class Settings(BaseSettings):
     # Namespace singleuser pods and workers live in on this cluster.
     namespace: str = "jupyterhub"
 
-    # Worker pod image + how it resolves ndcctools (mirrors the hand-built
-    # prototype in clusters/*/infrastructure/taskvine-workers).
-    worker_image: str = "ghcr.io/prefix-dev/pixi:0.76.1"
-    worker_pixi_configmap: str = "taskvine-worker-pixi"
+    # Purpose-built image (worker/Dockerfile in this repo) with ndcctools
+    # baked in at build time - no runtime install step, so no dependency on
+    # conda-forge being reachable at pod start, and no initContainer at all.
+    worker_image: str = "ghcr.io/maniaclab/taskvine-gateway-worker:latest"
 
     # "emptydir" (default) matches how dask-gateway's own workers handle
     # scratch here - no PVC at all, just local ephemeral storage, since

@@ -64,13 +64,31 @@ single source of truth for a worker's footprint - they set both the
 `resources.requests/limits` (request == limit, so a worker can't balloon
 past what it advertises to the manager).
 
-Worker scratch space (`/workspace`, where `vine_worker` unpacks its own
-environment and any per-task working directories) defaults to an
-`emptyDir` - deliberately not persistent, the same way dask-gateway's own
-workers use local ephemeral storage rather than a volume. Set
-`TVG_WORKER_WORKSPACE_KIND=pvc` (plus `TVG_WORKER_WORKSPACE_STORAGE_CLASS`
-and `TVG_WORKER_WORKSPACE_STORAGE_SIZE`) if a deployment needs scratch to
+Worker scratch space (`/workspace`, `vine_worker`'s working directory for
+per-task files) defaults to an `emptyDir` - deliberately not persistent,
+the same way dask-gateway's own workers use local ephemeral storage
+rather than a volume. Set `TVG_WORKER_WORKSPACE_KIND=pvc` (plus
+`TVG_WORKER_WORKSPACE_STORAGE_CLASS` and
+`TVG_WORKER_WORKSPACE_STORAGE_SIZE`) if a deployment needs scratch to
 survive a pod restart or needs more space than local node disk offers.
+
+## Worker image
+
+`worker/` builds the image workers actually run
+(`ghcr.io/maniaclab/taskvine-gateway-worker`, published by
+`.github/workflows/build-worker-image.yml` on push to `main`) -
+`ndcctools` is baked in at build time rather than resolved from
+conda-forge on every pod start, so a worker pod is just scheduling + a
+(node-cached) image pull + `exec vine_worker`, with no dependency on
+conda-forge being reachable at pod start and no initContainer at all.
+Each submitted *task*'s own execution environment is a separate, later
+concern, unrelated to what this image provides: package it with
+[`poncho`](https://cctools.readthedocs.io/en/latest/poncho/) from the
+notebook kernel (`poncho_package_create`), declare it to the manager
+(`m.declare_poncho("my_env.tar.gz")`), and pass it per-computation
+(`environment=` for `DaskVine`, or per-`Task` for plain TaskVine).
+TaskVine ships and unpacks it on whichever worker runs that task,
+regardless of what's in the worker's own base image.
 
 ## Configuration
 

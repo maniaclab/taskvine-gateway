@@ -30,7 +30,7 @@ def shared_data_mount_path(username: str) -> str:
 
 def ensure_manager_service(api: client.CoreV1Api, username: str) -> None:
     """Get-or-create the Service that gives a stable DNS name to a user's
-    notebook pod (z2jh does not create one - see service-manager-arosberg.yaml)."""
+    notebook pod (z2jh does not create one)."""
     name = manager_service_name(username)
     try:
         api.read_namespaced_service(name, settings.namespace)
@@ -58,40 +58,22 @@ def _worker_statefulset_body(username: str, replicas: int) -> client.V1StatefulS
     manager_host = f"{manager_service_name(username)}.{settings.namespace}.svc.cluster.local"
     labels = {"app": WORKER_APP_LABEL, USER_LABEL: username}
 
-    pixi_install = client.V1Container(
-        name="pixi-install",
-        image=settings.worker_image,
-        command=["/bin/sh", "-c"],
-        args=[
-            "set -e\n"
-            "cp /pixi-config/pixi.toml /workspace/pixi.toml\n"
-            "pixi install --manifest-path /workspace/pixi.toml"
-        ],
-        volume_mounts=[
-            client.V1VolumeMount(name="pixi-config", mount_path="/pixi-config"),
-            client.V1VolumeMount(name="workspace", mount_path="/workspace"),
-        ],
-        resources=client.V1ResourceRequirements(
-            requests={"cpu": "250m", "memory": "512Mi"},
-            limits={"cpu": "500m", "memory": "512Mi"},
-        ),
-    )
-
+    # ndcctools is baked into worker_image at build time (see worker/Dockerfile
+    # in this repo) - no initContainer/install step needed at pod start, just
+    # exec vine_worker directly with its own CLI args.
     vine_worker = client.V1Container(
         name="vine-worker",
         image=settings.worker_image,
-        command=["/bin/sh", "-c"],
         args=[
-            "set -e\n"
-            'eval "$(pixi shell-hook --manifest-path /workspace/pixi.toml --shell bash)"\n'
-            f"exec vine_worker --cores={settings.worker_cores} --memory={settings.worker_memory_mb} --disk={settings.worker_disk_mb} "
-            "--connect-timeout=900 --idle-timeout=86400 "
-            '"$MANAGER_HOST" "$MANAGER_PORT"'
+            f"--cores={settings.worker_cores}",
+            f"--memory={settings.worker_memory_mb}",
+            f"--disk={settings.worker_disk_mb}",
+            "--connect-timeout=900",
+            "--idle-timeout=86400",
+            manager_host,
+            str(settings.manager_port),
         ],
-        env=[
-            client.V1EnvVar(name="MANAGER_HOST", value=manager_host),
-            client.V1EnvVar(name="MANAGER_PORT", value=str(settings.manager_port)),
-        ],
+        working_dir="/workspace",
         resources=client.V1ResourceRequirements(
             requests={"cpu": str(settings.worker_cores), "memory": f"{settings.worker_memory_mb}Mi"},
             limits={"cpu": str(settings.worker_cores), "memory": f"{settings.worker_memory_mb}Mi"},
@@ -103,7 +85,6 @@ def _worker_statefulset_body(username: str, replicas: int) -> client.V1StatefulS
     )
 
     volumes = [
-        client.V1Volume(name="pixi-config", config_map=client.V1ConfigMapVolumeSource(name=settings.worker_pixi_configmap)),
         client.V1Volume(
             name="shared-data",
             persistent_volume_claim=client.V1PersistentVolumeClaimVolumeSource(claim_name=shared_data_pvc_name(username)),
@@ -131,7 +112,6 @@ def _worker_statefulset_body(username: str, replicas: int) -> client.V1StatefulS
         ]
 
     pod_spec = client.V1PodSpec(
-        init_containers=[pixi_install],
         containers=[vine_worker],
         volumes=volumes,
     )
