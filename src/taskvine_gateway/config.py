@@ -14,6 +14,12 @@ class Settings(BaseSettings):
     # conda-forge being reachable at pod start, and no initContainer at all.
     worker_image: str = "ghcr.io/maniaclab/taskvine-gateway-worker:latest"
 
+    # Name of a kubernetes.io/dockerconfigjson Secret (in `namespace`) to
+    # pull worker_image with, if it's not publicly readable. Empty (default)
+    # means don't set imagePullSecrets at all - only needed when the image's
+    # registry requires auth.
+    worker_image_pull_secret: str = ""
+
     # "emptydir" (default) matches how dask-gateway's own workers handle
     # scratch here - no PVC at all, just local ephemeral storage, since
     # worker scratch is disposable and doesn't need Ceph-backed persistence.

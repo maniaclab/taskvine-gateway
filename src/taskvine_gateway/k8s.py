@@ -114,6 +114,11 @@ def _worker_statefulset_body(username: str, replicas: int) -> client.V1StatefulS
     pod_spec = client.V1PodSpec(
         containers=[vine_worker],
         volumes=volumes,
+        image_pull_secrets=(
+            [client.V1LocalObjectReference(name=settings.worker_image_pull_secret)]
+            if settings.worker_image_pull_secret
+            else None
+        ),
     )
 
     return client.V1StatefulSet(
