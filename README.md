@@ -46,7 +46,7 @@ cluster.close()
 ## Idle pools
 
 A background loop periodically asks each pool's manager - the same
-`manager_status` query [`vine_status`](https://ccl.cse.nd.edu/software/manuals/vine_status.html)
+`manager_status` query [`vine_status`](https://cctools.readthedocs.io/en/stable/man_pages/vine_status)
 uses - whether it has any waiting or running tasks. A pool with neither for
 `TVG_IDLE_TIMEOUT_SECONDS` (default 1h, matching dask-gateway's own
 `idle_timeout` here) is scaled to 0 replicas; an unreachable manager (e.g.
