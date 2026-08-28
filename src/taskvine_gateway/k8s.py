@@ -20,12 +20,19 @@ def worker_statefulset_name(username: str) -> str:
     return settings.worker_statefulset_name_template.format(username=username)
 
 
-def shared_data_pvc_name(username: str) -> str:
-    return settings.shared_data_pvc_template.format(username=username)
-
-
-def shared_data_mount_path(username: str) -> str:
-    return settings.shared_data_mount_path_template.format(username=username)
+def _pvc_mount_volume_and_mount(mount, username: str) -> tuple[client.V1Volume, client.V1VolumeMount]:
+    volume = client.V1Volume(
+        name=mount.name,
+        persistent_volume_claim=client.V1PersistentVolumeClaimVolumeSource(
+            claim_name=mount.claim_name_template.format(username=username)
+        ),
+    )
+    volume_mount = client.V1VolumeMount(
+        name=mount.name,
+        mount_path=mount.mount_path_template.format(username=username),
+        read_only=mount.read_only,
+    )
+    return volume, volume_mount
 
 
 def ensure_manager_service(api: client.CoreV1Api, username: str) -> None:
@@ -58,6 +65,8 @@ def _worker_statefulset_body(username: str, replicas: int) -> client.V1StatefulS
     manager_host = f"{manager_service_name(username)}.{settings.namespace}.svc.cluster.local"
     labels = {"app": WORKER_APP_LABEL, USER_LABEL: username}
 
+    pvc_mounts = [_pvc_mount_volume_and_mount(m, username) for m in settings.worker_pvc_mounts]
+
     # ndcctools is baked into worker_image at build time (see worker/Dockerfile
     # in this repo) - no initContainer/install step needed at pod start, just
     # exec vine_worker directly with its own CLI args.
@@ -80,16 +89,11 @@ def _worker_statefulset_body(username: str, replicas: int) -> client.V1StatefulS
         ),
         volume_mounts=[
             client.V1VolumeMount(name="workspace", mount_path="/workspace"),
-            client.V1VolumeMount(name="shared-data", mount_path=shared_data_mount_path(username)),
+            *(vm for _, vm in pvc_mounts),
         ],
     )
 
-    volumes = [
-        client.V1Volume(
-            name="shared-data",
-            persistent_volume_claim=client.V1PersistentVolumeClaimVolumeSource(claim_name=shared_data_pvc_name(username)),
-        ),
-    ]
+    volumes = [v for v, _ in pvc_mounts]
 
     volume_claim_templates = None
     if settings.worker_workspace_kind == "emptydir":

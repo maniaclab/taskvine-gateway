@@ -72,6 +72,25 @@ rather than a volume. Set `TVG_WORKER_WORKSPACE_KIND=pvc` (plus
 `TVG_WORKER_WORKSPACE_STORAGE_SIZE`) if a deployment needs scratch to
 survive a pod restart or needs more space than local node disk offers.
 
+### PVC mounts
+
+`TVG_WORKER_PVC_MOUNTS` is a JSON array of PVCs to mount into every
+worker pod - empty by default (no PVCs mounted unless configured). Each
+entry's `claim_name_template` and `mount_path_template` support
+`{username}` substitution for a per-user claim, or can be used as-is (no
+`{username}`) for a single PVC shared across all users - e.g. a per-user
+data volume alongside a shared, read-only reference dataset:
+
+```bash
+export TVG_WORKER_PVC_MOUNTS='[
+  {"name": "user-data", "claim_name_template": "user-data-{username}", "mount_path_template": "/data/{username}"},
+  {"name": "reference-dataset", "claim_name_template": "reference-dataset", "mount_path_template": "/mnt/reference", "read_only": true}
+]'
+```
+
+Each entry's `name` must be unique and not collide with `workspace` (the
+other built-in volume name).
+
 ## Worker image
 
 `worker/` builds the image workers actually run

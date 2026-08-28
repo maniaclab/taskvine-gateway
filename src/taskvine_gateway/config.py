@@ -1,6 +1,21 @@
 from typing import Literal
 
+from pydantic import BaseModel
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class WorkerMount(BaseModel):
+    """One PVC to mount into every worker pod. claim_name_template and
+    mount_path_template both support {username} substitution (str.format)
+    for per-user claims; a template with no {username} placeholder is used
+    as-is, so a single PVC shared across all users (e.g. a read-only
+    reference dataset) works the same way with no special-casing.
+    """
+
+    name: str
+    claim_name_template: str
+    mount_path_template: str
+    read_only: bool = False
 
 
 class Settings(BaseSettings):
@@ -51,13 +66,13 @@ class Settings(BaseSettings):
     # Naming templates - {username} is substituted by str.format.
     manager_service_name_template: str = "taskvine-manager-{username}"
     worker_statefulset_name_template: str = "taskvine-worker-{username}"
-    shared_data_pvc_template: str = "shared-data-{username}"
 
-    # Mounted into every worker alongside the notebook's own mount of the
-    # same PVC, at the same path, so a path a user writes from the notebook
-    # resolves identically inside a task running on a worker. Must match
-    # whatever mountPath the notebook side actually uses for this PVC.
-    shared_data_mount_path_template: str = "/data/{username}"
+    # PVCs to mount into every worker pod - a per-user data PVC, a shared
+    # read-only reference dataset, etc. Set via TVG_WORKER_PVC_MOUNTS as a
+    # JSON array of WorkerMount objects. Empty by default - no PVCs are
+    # mounted unless configured. `name` must be unique per entry and not
+    # collide with "workspace" (the other built-in volume name).
+    worker_pvc_mounts: list[WorkerMount] = []
 
     max_workers_per_user: int = 20
 
