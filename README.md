@@ -75,16 +75,10 @@ local ephemeral storage rather than a volume. Set
 if a deployment needs scratch to survive a pod restart or needs more space
 than local node disk offers.
 
-There's no `TVG_WORKER_DISK_MB`: `vine_worker --disk` (what it advertises
-to the manager for task-fit accounting) is derived from
-`TVG_WORKER_WORKSPACE_SIZE_GB` (`workspace_size_gb * 1024` MB) rather than
-being its own independent setting, so a worker can never advertise more
-disk than the real volume backing `/workspace` actually has.
-
 ### Per-pool overrides
 
 A caller can override their own pool's `cores`/`memory_mb` and
-`workspace_kind`/`workspace_size_gb` per `PUT /pools/me` call (or via
+`workspace_size_gb` per `PUT /pools/me` call (or via
 `TaskVineCluster.scale()`'s matching keyword arguments) instead of using
 the deployment's defaults above - the same idea as `dask-gateway`'s own
 `new_cluster(worker_cores=..., worker_memory=...)`. There's no `disk_mb`
