@@ -64,9 +64,41 @@ class TaskVineCluster:
         except urllib.error.URLError as e:
             raise TaskVineGatewayError(f"couldn't reach taskvine-gateway at {self._url}: {e.reason}") from e
 
-    def scale(self, n: int) -> dict:
-        """Set the desired worker count, creating the pool on first call."""
-        return self._request("PUT", {"replicas": n})
+    def scale(
+        self,
+        n: int,
+        *,
+        cores: int | None = None,
+        memory_mb: int | None = None,
+        workspace_size_gb: int | None = None,
+    ) -> dict:
+        """Set the desired worker count, creating the pool on first call.
+
+        cores/memory_mb override this pool's per-worker footprint; omit
+        either to use the gateway's default. Each is bounded both
+        per-worker and pool-wide (replicas * cores, replicas * memory_mb) -
+        the call raises TaskVineGatewayError (422) if a value exceeds
+        either bound, rather than silently clamping it. There's no
+        disk_mb: the worker's advertised disk comes from workspace_size_gb
+        instead (workspace_size_gb * 1024 MB), so it can never exceed what
+        the real volume backing /workspace actually holds.
+
+        There's no workspace_kind: whether workers get an emptyDir or a
+        PVC is fixed by the deployment, not something a caller can choose
+        (that would let a caller provision arbitrary PVCs). workspace_size_gb
+        only takes effect the first time a pool is created - Kubernetes
+        doesn't allow changing it on an existing pool, and the call raises
+        TaskVineGatewayError (409) if you try. Call close() first if you
+        need to change it.
+        """
+        body = {"replicas": n}
+        overrides = {
+            "cores": cores,
+            "memory_mb": memory_mb,
+            "workspace_size_gb": workspace_size_gb,
+        }
+        body.update({k: v for k, v in overrides.items() if v is not None})
+        return self._request("PUT", body)
 
     def status(self) -> dict:
         """Current pool status: desired vs ready replicas, manager address."""

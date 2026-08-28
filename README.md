@@ -13,8 +13,8 @@ the token already present in every singleuser pod's environment. The
 username is always derived from that token (via `HubAuth`), never from
 client input, so a caller can only ever affect their own pool.
 
-- `PUT /pools/me` `{"replicas": N}` - create-if-absent, set desired worker count
-- `GET /pools/me` - status (desired vs ready replicas, manager address)
+- `PUT /pools/me` `{"replicas": N, ...}` - create-if-absent, set desired worker count and (optionally) per-pool resource/workspace overrides - see "Per-pool overrides" below
+- `GET /pools/me` - status (desired vs ready replicas, manager address, resolved cores/memory/disk/workspace config)
 - `DELETE /pools/me` - tear down
 
 ### Scaling from a notebook
@@ -35,7 +35,11 @@ from taskvine_gateway import TaskVineCluster
 
 cluster = TaskVineCluster()
 cluster.scale(10)          # creates the pool on first call
-cluster.status()           # {'username': ..., 'desired_replicas': 10, 'ready_replicas': 3, ...}
+cluster.status()           # {'username': ..., 'desired_replicas': 10, 'ready_replicas': 3, 'cores': 1, ...}
+
+# Override this pool's per-worker resources (see "Per-pool overrides" below) -
+# omit any of these to use the gateway's default.
+cluster.scale(10, cores=2, memory_mb=4000)
 
 # Not required - an idle pool is scaled to 0 and eventually deleted on its
 # own (see "Idle pools" below) - but this is immediate if you're done for
@@ -58,19 +62,54 @@ existing objects; after, it's a fresh create.
 
 ## Worker resources and scratch space
 
-`TVG_WORKER_CORES` / `TVG_WORKER_MEMORY_MB` / `TVG_WORKER_DISK_MB` are the
-single source of truth for a worker's footprint - they set both the
-`vine_worker --cores/--memory/--disk` flags and the pod's k8s
-`resources.requests/limits` (request == limit, so a worker can't balloon
-past what it advertises to the manager).
+`TVG_WORKER_CORES` / `TVG_WORKER_MEMORY_MB` are the deployment's *default*
+worker footprint - they set both the `vine_worker --cores/--memory` flags
+and the pod's k8s `resources.requests/limits` (request == limit, so a
+worker can't balloon past what it advertises to the manager).
 
 Worker scratch space (`/workspace`, `vine_worker`'s working directory for
-per-task files) defaults to an `emptyDir` - deliberately not persistent,
-the same way dask-gateway's own workers use local ephemeral storage
-rather than a volume. Set `TVG_WORKER_WORKSPACE_KIND=pvc` (plus
-`TVG_WORKER_WORKSPACE_STORAGE_CLASS` and
-`TVG_WORKER_WORKSPACE_STORAGE_SIZE`) if a deployment needs scratch to
-survive a pod restart or needs more space than local node disk offers.
+per-task files) defaults to an `emptyDir`, sized by `TVG_WORKER_WORKSPACE_SIZE_GB`
+- deliberately not persistent, the same way dask-gateway's own workers use
+local ephemeral storage rather than a volume. Set
+`TVG_WORKER_WORKSPACE_KIND=pvc` (plus `TVG_WORKER_WORKSPACE_STORAGE_CLASS`)
+if a deployment needs scratch to survive a pod restart or needs more space
+than local node disk offers.
+
+There's no `TVG_WORKER_DISK_MB`: `vine_worker --disk` (what it advertises
+to the manager for task-fit accounting) is derived from
+`TVG_WORKER_WORKSPACE_SIZE_GB` (`workspace_size_gb * 1024` MB) rather than
+being its own independent setting, so a worker can never advertise more
+disk than the real volume backing `/workspace` actually has.
+
+### Per-pool overrides
+
+A caller can override their own pool's `cores`/`memory_mb` and
+`workspace_kind`/`workspace_size_gb` per `PUT /pools/me` call (or via
+`TaskVineCluster.scale()`'s matching keyword arguments) instead of using
+the deployment's defaults above - the same idea as `dask-gateway`'s own
+`new_cluster(worker_cores=..., worker_memory=...)`. There's no `disk_mb`
+override - see "Worker resources and scratch space" above for why it's
+derived from `workspace_size_gb` instead.
+
+`cores`/`memory_mb` are checked against **two** independent ceilings, and
+a request exceeding either is rejected outright (`422`), not silently
+clamped down to it:
+
+- **Per-worker** (`TVG_MAX_WORKER_CORES` / `TVG_MAX_WORKER_MEMORY_MB` /
+  `TVG_MAX_WORKER_WORKSPACE_SIZE_GB`) - bounds a single worker's footprint,
+  regardless of how many replicas the pool has.
+- **Pool-wide** (`TVG_MAX_POOL_CORES` / `TVG_MAX_POOL_MEMORY_MB`) - bounds
+  `replicas * cores` and `replicas * memory_mb` across the whole pool,
+  mirroring `dask-gateway`'s own `cluster_max_cores`/`cluster_max_memory`
+  (a cap on the *whole cluster's* total footprint, not any one worker's).
+
+`cores`/`memory_mb` can be changed on an existing pool at any time - the
+change rolls out to workers via the underlying `StatefulSet`'s normal
+update mechanics. `workspace_kind`/`workspace_size_gb` can only be set the
+first time a pool is created: Kubernetes doesn't allow changing a
+`StatefulSet`'s volume claim templates in place, so a request to change
+either on a pool that already exists is rejected (`409`) - `DELETE
+/pools/me` first if you need to change them.
 
 ### PVC mounts
 

@@ -44,17 +44,32 @@ def _status_from(statefulset) -> PoolStatus:
         ready_replicas=statefulset.status.ready_replicas or 0,
         manager_host=f"{k8s.manager_service_name(username)}.{settings.namespace}.svc.cluster.local",
         manager_port=settings.manager_port,
+        **k8s.resolved_config(statefulset),
     )
 
 
 @app.put("/pools/me", response_model=PoolStatus)
 def scale_my_pool(req: ScaleRequest, username: str = Depends(get_username)) -> PoolStatus:
-    """Create-if-absent and set the caller's desired worker replica count.
+    """Create-if-absent and set the caller's desired worker replica count
+    and per-pool resource/workspace overrides.
 
     `username` comes only from the validated JupyterHub token (see auth.py) -
     a caller can never name a different user's pool.
     """
-    sts = k8s.ensure_worker_pool(apps_api, core_api, username, req.replicas)
+    try:
+        sts = k8s.ensure_worker_pool(
+            apps_api,
+            core_api,
+            username,
+            req.replicas,
+            cores=req.cores,
+            memory_mb=req.memory_mb,
+            workspace_size_gb=req.workspace_size_gb,
+        )
+    except k8s.WorkspaceImmutableError as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
+    except (k8s.ScaleValidationError, ValueError) as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
     return _status_from(sts)
 
 
