@@ -78,12 +78,17 @@ async def _reap_once(apps_api: client.AppsV1Api, core_api: client.CoreV1Api) -> 
     # apps_api's calls are synchronous (blocking) - run them off the event
     # loop so a slow k8s API call doesn't stall concurrent HTTP requests.
     pools = await asyncio.to_thread(
-        apps_api.list_namespaced_stateful_set, settings.namespace, label_selector=f"app={k8s.WORKER_APP_LABEL}"
+        apps_api.list_namespaced_stateful_set, settings.namespace, label_selector=f"app={settings.worker_app_label}"
     )
     now = time.monotonic()
 
     for pool in pools.items:
-        username = pool.metadata.labels.get(k8s.USER_LABEL)
+        # Raw username, not the USER_LABEL slug - manager_service_name and
+        # delete_worker_pool both need the raw form, since they slug
+        # internally (see the comment on _status_from in main.py for why
+        # passing an already-slugged value in would be wrong).
+        annotations = pool.metadata.annotations or {}
+        username = annotations.get(k8s.USERNAME_ANNOTATION) or pool.metadata.labels.get(k8s.USER_LABEL)
         if not username:
             continue
 

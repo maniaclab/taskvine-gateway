@@ -24,10 +24,23 @@ class Settings(BaseSettings):
     # Namespace singleuser pods and workers live in on this cluster.
     namespace: str = "jupyterhub"
 
-    # Purpose-built image (worker/Dockerfile in this repo) with ndcctools
-    # baked in at build time - no runtime install step, so no dependency on
-    # conda-forge being reachable at pod start, and no initContainer at all.
-    worker_image: str = "ghcr.io/maniaclab/taskvine-gateway-worker:latest"
+    # Must match this deployment's z2jh chart config
+    # (hub.kubespawner.slug_scheme, or c.KubeSpawner.slug_scheme directly) -
+    # KubeSpawner never uses a user's raw Hub username as a k8s object name
+    # or label value, it escapes it first (see slugs.py), and this gateway
+    # has to reproduce whichever scheme that deployment actually uses or
+    # the names/labels/mount paths it computes won't match what KubeSpawner
+    # created. "safe" is KubeSpawner's own current default; "escape" is its
+    # older, still-supported scheme.
+    username_slug_scheme: Literal["safe", "escape"] = "safe"
+
+    # Purpose-built image with ndcctools baked in at build time - no
+    # runtime install step, so no dependency on conda-forge being reachable
+    # at pod start, and no initContainer at all. There's no generic public
+    # default that works for every deployment - build your own from
+    # worker/ in this repo (or extend it) and publish it somewhere your
+    # cluster can pull from, then set this to that image.
+    worker_image: str = "REPLACE_ME"
 
     # Name of a kubernetes.io/dockerconfigjson Secret (in `namespace`) to
     # pull worker_image with, if it's not publicly readable. Empty (default)
@@ -94,9 +107,25 @@ class Settings(BaseSettings):
     max_pool_cores: int = 16
     max_pool_memory_mb: int = 32000
 
-    # Naming templates - {username} is substituted by str.format.
-    manager_service_name_template: str = "taskvine-manager-{username}"
-    worker_statefulset_name_template: str = "taskvine-worker-{username}"
+    # Naming templates - {username} is substituted with a k8s-safe slug of
+    # the caller's raw Hub username (see slugs.py, and username_slug_scheme
+    # above) rather than the raw username itself, same as KubeSpawner does
+    # for its own {username} templates - a raw username can contain
+    # characters invalid in a k8s object name. That slug can be up to 48
+    # chars, and a worker StatefulSet's pod hostname (name + "-" +
+    # ordinal) must fit within the 63-char DNS label limit - keep these
+    # prefixes short so long usernames still fit (worker: prefix + 48 +
+    # "-<ordinal>" <= 63).
+    manager_service_name_template: str = "tv-mgr-{username}"
+    worker_statefulset_name_template: str = "tv-wk-{username}"
+
+    # Every worker pod's `app` label, so a deployment can allow ingress to
+    # the manager port from worker pods without matching on the per-user
+    # label (see clusters/*/infrastructure/jupyterhub/install/patch-taskvine.yaml
+    # in rp1-core for an example NetworkPolicy that does exactly this) -
+    # change it if it collides with an existing label convention. Also
+    # used as the worker StatefulSet's headless service_name.
+    worker_app_label: str = "taskvine-worker"
 
     # PVCs to mount into every worker pod - a per-user data PVC, a shared
     # read-only reference dataset, etc. Set via TVG_WORKER_PVC_MOUNTS as a
