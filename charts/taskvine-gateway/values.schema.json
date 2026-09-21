@@ -1,0 +1,114 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "title": "taskvine-gateway",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["image", "worker", "jupyterhub"],
+  "properties": {
+    "image": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository", "tag", "pullPolicy"],
+      "properties": {
+        "repository": { "type": "string", "minLength": 1 },
+        "tag": { "type": "string", "minLength": 1 },
+        "pullPolicy": { "type": "string", "enum": ["Always", "IfNotPresent", "Never"] }
+      }
+    },
+    "imagePullSecret": { "type": "string" },
+    "replicaCount": { "type": "integer", "minimum": 0 },
+    "serviceAccount": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["create"],
+      "properties": {
+        "create": { "type": "boolean" },
+        "name": { "type": "string" }
+      }
+    },
+    "service": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["port"],
+      "properties": {
+        "port": { "type": "integer", "minimum": 1, "maximum": 65535 }
+      }
+    },
+    "resources": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "requests": { "$ref": "#/definitions/resourceList" },
+        "limits": { "$ref": "#/definitions/resourceList" }
+      }
+    },
+    "jupyterhub": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["apiUrl", "apiToken"],
+      "properties": {
+        "apiUrl": { "type": "string", "minLength": 1 },
+        "apiToken": { "type": "string", "minLength": 1 }
+      }
+    },
+    "namespace": { "type": "string" },
+    "worker": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["image"],
+      "properties": {
+        "image": {
+          "type": "string",
+          "minLength": 1,
+          "not": { "const": "REPLACE_ME" },
+          "description": "No usable generic default - the placeholder value itself is rejected so an un-set worker.image fails at `helm template`/`install` time, not with a runtime ImagePullBackOff."
+        },
+        "imagePullSecret": { "type": "string" }
+      }
+    },
+    "workerPvcMounts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "claimNameTemplate", "mountPathTemplate"],
+        "properties": {
+          "name": { "type": "string", "minLength": 1 },
+          "claimNameTemplate": { "type": "string", "minLength": 1 },
+          "mountPathTemplate": { "type": "string", "minLength": 1 },
+          "readOnly": { "type": "boolean" }
+        }
+      }
+    },
+    "extraEnv": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "value"],
+        "properties": {
+          "name": { "type": "string", "minLength": 1 },
+          "value": { "type": "string" }
+        }
+      }
+    },
+    "networkPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled"],
+      "properties": {
+        "enabled": { "type": "boolean" }
+      }
+    }
+  },
+  "definitions": {
+    "resourceList": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "cpu": { "type": "string" },
+        "memory": { "type": "string" }
+      }
+    }
+  }
+}
