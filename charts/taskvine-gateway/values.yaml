@@ -1,0 +1,91 @@
+# See the taskvine-gateway README (https://github.com/maniaclab/taskvine-gateway)
+# for the full picture, especially "Requirements" and "Required JupyterHub-side
+# wiring" - this chart only templates the Kubernetes side, it doesn't remove
+# any of that deployment's own prerequisites (KubeSpawner, a NetworkPolicy
+# allowing worker -> notebook-pod traffic, etc).
+
+# -- Image the gateway server itself runs. Defaults to this project's
+# own image (see the repo's README) - unlike worker.image below, there's
+# no reason a deployment would need a *different* gateway image (it's
+# just this repo's own server code, not something meant to be extended
+# per-deployment), so defaulting to what this repo's own CI publishes is
+# reasonable rather than requiring every deployment to set it. Override
+# `imagePullSecret` (not this) if that image isn't publicly readable.
+image:
+  repository: ghcr.io/maniaclab/taskvine-gateway
+  tag: latest
+  pullPolicy: IfNotPresent
+
+# -- Name of a kubernetes.io/dockerconfigjson Secret (in the release
+# namespace) to pull `image` with, if its registry isn't publicly
+# readable. Empty (default) means no imagePullSecrets.
+imagePullSecret: ""
+
+replicaCount: 1
+
+serviceAccount:
+  create: true
+  # -- Defaults to the chart's fullname if empty.
+  name: ""
+
+service:
+  port: 8080
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+# -- The JupyterHub Hub API this service validates callers' tokens
+# against, and this service's own API token (it must be registered as a
+# JupyterHub service - see "Required JupyterHub-side wiring" in the
+# README) - both required, neither has a sane generic default.
+jupyterhub:
+  apiUrl: ""
+  apiToken: ""
+
+# -- Namespace worker StatefulSets/Services are created in (TVG_NAMESPACE) -
+# defaults to this release's own namespace, which is correct unless
+# singleuser pods run somewhere else.
+namespace: ""
+
+# -- Image worker pods run (TVG_WORKER_IMAGE) - same story as `image`
+# above, no usable generic default. Build one from worker/ in this repo.
+worker:
+  image: REPLACE_ME
+  # -- Name of a kubernetes.io/dockerconfigjson Secret (TVG_WORKER_IMAGE_PULL_SECRET)
+  # to pull `worker.image` with, if it isn't publicly readable.
+  imagePullSecret: ""
+
+# -- PVCs to mount into every worker pod - see "PVC mounts" in the
+# README. Templated into TVG_WORKER_PVC_MOUNTS; empty means none mounted.
+# claimNameTemplate/mountPathTemplate support {username} substitution -
+# see "Username handling" in the README for what {username} actually is.
+workerPvcMounts: []
+# workerPvcMounts:
+#   - name: user-data
+#     claimNameTemplate: "user-data-{username}"
+#     mountPathTemplate: "/data/{username}"
+#   - name: reference-dataset
+#     claimNameTemplate: "reference-dataset"
+#     mountPathTemplate: "/mnt/reference"
+#     readOnly: true
+
+# -- Any other TVG_* env var (see config.py in this repo for the full
+# list/defaults) not already covered by a value above - e.g.
+# TVG_WORKER_CORES, TVG_MAX_POOL_CORES, TVG_IDLE_TIMEOUT_SECONDS.
+# {name, value} pairs, same shape as a plain Container env entry.
+extraEnv: []
+
+networkPolicy:
+  # -- Restricts ingress to this service's own API (not the separate
+  # worker -> notebook-pod NetworkPolicy the README's "Required
+  # JupyterHub-side wiring" section covers, which this chart has no part
+  # in since it lives on the singleuser/z2jh side) to pods carrying
+  # KubeSpawner's hub.jupyter.org/username label, i.e. singleuser
+  # notebook pods. Off by default since not every cluster runs
+  # NetworkPolicies at all.
+  enabled: false
