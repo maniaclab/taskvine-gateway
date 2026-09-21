@@ -250,8 +250,10 @@ PVC mount points at a PVC that doesn't exist, etc.
 
 ## Required RBAC
 
-The gateway needs to create/read/update/delete `StatefulSet`s and
-`Service`s in its own namespace:
+The `charts/taskvine-gateway` Helm chart below templates this for you
+(see its `templates/role.yaml`) unless `serviceAccount.create: false`. If
+deploying without it, the gateway needs to create/read/update/delete
+`StatefulSet`s and `Service`s in its own namespace:
 
 ```yaml
 apiVersion: rbac.authorization.k8s.io/v1
@@ -261,14 +263,51 @@ metadata:
 rules:
   - apiGroups: ["apps"]
     resources: ["statefulsets"]
-    verbs: ["get", "list", "create", "patch", "delete"]
+    verbs: ["get", "list", "watch", "create", "patch", "delete"]
   - apiGroups: [""]
     resources: ["services"]
-    verbs: ["get", "create", "delete"]
+    verbs: ["get", "list", "watch", "create", "delete"]
 ```
 
 bound to the `ServiceAccount` its `Deployment` runs as, via a matching
 `RoleBinding` in the same namespace.
+
+## Server image
+
+Same idea as the worker image above, but for the gateway server itself:
+`Dockerfile` (repo root) bakes the server and its dependencies in at
+build time rather than installing them from a pinned git rev on every
+pod start. `TVG_*`-driven config, not build-time config, so one image
+serves every deployment. This repo's own CI
+(`.github/workflows/build-server-image.yml`) publishes it to
+`ghcr.io/maniaclab/taskvine-gateway` as this project's own reference
+build, same caveat as the worker image: not a generic public default,
+build your own if you're not this project.
+
+## Deploying
+
+`charts/taskvine-gateway` is a Helm chart covering everything above -
+the `Deployment`/`Service`/`ServiceAccount`/`Role`/`RoleBinding`, and
+optionally a `NetworkPolicy` (`networkPolicy.enabled`) restricting
+ingress to the gateway's own API to singleuser pods. See its
+`values.yaml` for the full set of values and what each maps to; at
+minimum a deployment needs to set `image.repository`,
+`worker.image`, and `jupyterhub.apiUrl`/`apiToken` - none of which have
+a usable generic default, for the reasons explained above.
+
+```bash
+helm install taskvine-gateway ./charts/taskvine-gateway \
+  --namespace jupyterhub \
+  --set image.repository=ghcr.io/maniaclab/taskvine-gateway \
+  --set worker.image=ghcr.io/maniaclab/taskvine-gateway-worker \
+  --set jupyterhub.apiUrl=http://hub.jupyterhub.svc.cluster.local:8081/hub/api \
+  --set jupyterhub.apiToken=... # or use -f values.yaml / --set-file
+```
+
+Flux-managed deployments (this project's own included) more typically
+source the chart straight from this repo via a `GitRepository`, pinned
+to a commit, rather than `helm install` directly - see rp1-core's own
+`infrastructure/taskvine-gateway/` for a worked example.
 
 ## Running the server locally
 

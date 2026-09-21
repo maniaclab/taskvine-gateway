@@ -1,0 +1,26 @@
+{{- if .Values.networkPolicy.enabled }}
+# Only singleuser notebook pods may reach the gateway's own API - nothing
+# else in-cluster, and no ingress from outside the cluster at all.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "taskvine-gateway.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "taskvine-gateway.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app: taskvine-gateway
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchExpressions:
+              - key: hub.jupyter.org/username
+                operator: Exists
+      ports:
+        - port: 8080
+          protocol: TCP
+{{- end }}

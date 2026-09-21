@@ -1,0 +1,63 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "taskvine-gateway.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "taskvine-gateway.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      app: taskvine-gateway
+  template:
+    metadata:
+      labels:
+        app: taskvine-gateway
+        {{- include "taskvine-gateway.labels" . | nindent 8 }}
+        # z2jh's `hub` NetworkPolicy only allows ingress to the Hub pod
+        # from pods carrying this label (same mechanism dask-gateway's
+        # own pod uses) - without it, calls to the Hub API (HubAuth token
+        # validation) fail to connect at all.
+        hub.jupyter.org/network-access-hub: "true"
+    spec:
+      serviceAccountName: {{ include "taskvine-gateway.serviceAccountName" . }}
+      {{- if .Values.imagePullSecret }}
+      imagePullSecrets:
+        - name: {{ .Values.imagePullSecret }}
+      {{- end }}
+      containers:
+        - name: taskvine-gateway
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - containerPort: 8080
+              name: http
+          env:
+            - name: JUPYTERHUB_API_URL
+              value: {{ required "jupyterhub.apiUrl is required - see \"Required JupyterHub-side wiring\" in the README" .Values.jupyterhub.apiUrl | quote }}
+            - name: JUPYTERHUB_API_TOKEN
+              value: {{ required "jupyterhub.apiToken is required - see \"Required JupyterHub-side wiring\" in the README" .Values.jupyterhub.apiToken | quote }}
+            - name: TVG_NAMESPACE
+              value: {{ include "taskvine-gateway.namespace" . | quote }}
+            - name: TVG_WORKER_IMAGE
+              value: {{ required "worker.image is required - see \"Requirements\" in the README" .Values.worker.image | quote }}
+            {{- if .Values.worker.imagePullSecret }}
+            - name: TVG_WORKER_IMAGE_PULL_SECRET
+              value: {{ .Values.worker.imagePullSecret | quote }}
+            {{- end }}
+            {{- if .Values.workerPvcMounts }}
+            - name: TVG_WORKER_PVC_MOUNTS
+              value: |-
+                {{- $mounts := list }}
+                {{- range .Values.workerPvcMounts }}
+                {{- $mounts = append $mounts (dict "name" .name "claim_name_template" .claimNameTemplate "mount_path_template" .mountPathTemplate "read_only" (.readOnly | default false)) }}
+                {{- end }}
+                {{ toJson $mounts }}
+            {{- end }}
+            {{- range .Values.extraEnv }}
+            - name: {{ .name }}
+              value: {{ .value | quote }}
+            {{- end }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}

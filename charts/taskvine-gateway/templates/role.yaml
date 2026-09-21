@@ -1,0 +1,19 @@
+{{- if .Values.serviceAccount.create }}
+# Scoped to exactly what taskvine-gateway needs to manage per-user worker
+# pools in its own namespace: nothing cluster-scoped, no access to pods,
+# secrets, or any other resource type.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "taskvine-gateway.fullname" . }}
+  namespace: {{ include "taskvine-gateway.namespace" . }}
+  labels:
+    {{- include "taskvine-gateway.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["apps"]
+    resources: ["statefulsets"]
+    verbs: ["get", "list", "watch", "create", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get", "list", "watch", "create", "delete"]
+{{- end }}

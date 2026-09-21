@@ -1,0 +1,9 @@
+apiVersion: v2
+name: taskvine-gateway
+description: Self-service TaskVine worker pools on Kubernetes, authenticated via JupyterHub.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+home: https://github.com/maniaclab/taskvine-gateway
+sources:
+  - https://github.com/maniaclab/taskvine-gateway
