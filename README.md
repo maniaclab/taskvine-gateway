@@ -291,14 +291,16 @@ the `Deployment`/`Service`/`ServiceAccount`/`Role`/`RoleBinding`, and
 optionally a `NetworkPolicy` (`networkPolicy.enabled`) restricting
 ingress to the gateway's own API to singleuser pods. See its
 `values.yaml` for the full set of values and what each maps to; at
-minimum a deployment needs to set `image.repository`,
-`worker.image`, and `jupyterhub.apiUrl`/`apiToken` - none of which have
-a usable generic default, for the reasons explained above.
+minimum a deployment needs to set `worker.image` and
+`jupyterhub.apiUrl`/`apiToken` - none of which have a usable generic
+default, for the reasons explained above. `image.repository` (the
+gateway's own image) does have one, since unlike the worker image
+there's no reason a deployment would need a different one - override it
+only for a private mirror or your own build of this repo.
 
 ```bash
 helm install taskvine-gateway ./charts/taskvine-gateway \
   --namespace jupyterhub \
-  --set image.repository=ghcr.io/maniaclab/taskvine-gateway \
   --set worker.image=ghcr.io/maniaclab/taskvine-gateway-worker \
   --set jupyterhub.apiUrl=http://hub.jupyterhub.svc.cluster.local:8081/hub/api \
   --set jupyterhub.apiToken=... # or use -f values.yaml / --set-file

@@ -4,12 +4,15 @@
 # any of that deployment's own prerequisites (KubeSpawner, a NetworkPolicy
 # allowing worker -> notebook-pod traffic, etc).
 
-# -- Image the gateway server itself runs. There's no usable public
-# default - this project's own CI publishes ghcr.io/maniaclab/taskvine-gateway
-# as its reference build (see the repo's README), not a generic default
-# every deployment can rely on.
+# -- Image the gateway server itself runs. Defaults to this project's
+# own image (see the repo's README) - unlike worker.image below, there's
+# no reason a deployment would need a *different* gateway image (it's
+# just this repo's own server code, not something meant to be extended
+# per-deployment), so defaulting to what this repo's own CI publishes is
+# reasonable rather than requiring every deployment to set it. Override
+# `imagePullSecret` (not this) if that image isn't publicly readable.
 image:
-  repository: REPLACE_ME
+  repository: ghcr.io/maniaclab/taskvine-gateway
   tag: latest
   pullPolicy: IfNotPresent
 
