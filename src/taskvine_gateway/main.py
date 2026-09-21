@@ -37,7 +37,14 @@ app = FastAPI(title="taskvine-gateway", lifespan=lifespan)
 
 
 def _status_from(statefulset) -> PoolStatus:
-    username = statefulset.metadata.labels[k8s.USER_LABEL]
+    # The raw username lives in USERNAME_ANNOTATION, not USER_LABEL (a
+    # slug - see the comment on it in k8s.py). manager_service_name needs
+    # the raw username too, since it slugs internally - passing in an
+    # already-slugged value here would slug it a second time, which isn't
+    # guaranteed to reproduce the same string (label and object-name slugs
+    # use different length budgets).
+    annotations = statefulset.metadata.annotations or {}
+    username = annotations.get(k8s.USERNAME_ANNOTATION, statefulset.metadata.labels[k8s.USER_LABEL])
     return PoolStatus(
         username=username,
         desired_replicas=statefulset.spec.replicas,

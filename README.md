@@ -6,6 +6,32 @@ Kubernetes, authenticated as themselves via their existing JupyterHub API
 token - the same trust model [dask-gateway](https://gateway.dask.org/) uses
 for Dask (`gateway.auth.type: jupyterhub`).
 
+## Requirements
+
+Unlike `dask-gateway`, which owns its whole worker/scheduler lifecycle
+independently, a TaskVine worker has to dial back into the *manager
+running inside the requesting user's own notebook pod* - that's what
+makes this fundamentally different to deploy, and worth reading before
+setting it up on a new cluster:
+
+- **[zero-to-jupyterhub](https://z2jh.jupyter.org/) with `KubeSpawner`.**
+  Not just "any JupyterHub spawner" - the gateway has to find a specific
+  user's already-running notebook pod, and does so the same way
+  KubeSpawner itself would (its `hub.jupyter.org/username` pod label -
+  see "Username handling" below).
+- **One notebook server per user** (the z2jh/KubeSpawner default).
+  Named servers (`--allow-named-servers`) aren't supported: the
+  manager Service's selector matches on username alone, so with
+  multiple servers per user it could route to whichever one KubeSpawner
+  happens to select, not necessarily the one actually running the
+  TaskVine manager.
+- **A worker-reachable path to the manager port.** If the deployment's
+  z2jh chart has `singleuser.networkPolicy.enabled: true` (the z2jh
+  default), worker pods need an explicit allow-rule to reach it - see
+  "Required JupyterHub-side wiring" below.
+- **Your own worker image.** `worker_image` has no usable default -
+  build one from `worker/` in this repo (see "Worker image" below).
+
 ## API
 
 Every request must carry `Authorization: token <JUPYTERHUB_API_TOKEN>` -
@@ -112,7 +138,11 @@ worker pod - empty by default (no PVCs mounted unless configured). Each
 entry's `claim_name_template` and `mount_path_template` support
 `{username}` substitution for a per-user claim, or can be used as-is (no
 `{username}`) for a single PVC shared across all users - e.g. a per-user
-data volume alongside a shared, read-only reference dataset:
+data volume alongside a shared, read-only reference dataset. `{username}`
+here is a slug, not the caller's raw username - see "Username handling"
+below, since a per-user claim name only actually matches an existing PVC
+if it resolves the same way KubeSpawner's own `{username}` templating
+(or `pre_spawn_hook`) already resolved it for that PVC:
 
 ```bash
 export TVG_WORKER_PVC_MOUNTS='[
@@ -126,12 +156,22 @@ other built-in volume name).
 
 ## Worker image
 
-`worker/` builds the image workers actually run
-(`ghcr.io/maniaclab/taskvine-gateway-worker`, published by
-`.github/workflows/build-worker-image.yml` on push to `main`) -
-`ndcctools` is baked in at build time rather than resolved from
-conda-forge on every pod start, so a worker pod is just scheduling + a
-(node-cached) image pull + `exec vine_worker`, with no dependency on
+`TVG_WORKER_IMAGE` has no usable default - there's no single image every
+deployment could pull, so it must be set explicitly. Build one from
+`worker/` in this repo (or extend it, e.g. to add commonly-needed task
+dependencies to the base image rather than shipping them per-task with
+poncho - see below) and publish it somewhere your cluster can pull from.
+
+This repo's own CI (`.github/workflows/build-worker-image.yml`) builds
+and publishes `worker/` to `ghcr.io/maniaclab/taskvine-gateway-worker`
+on every push to `main`, as this project's own reference build - not a
+generic default any deployment can rely on (its visibility/access is
+whatever this repo's own org has set, and it's only rebuilt when this
+repo's own `worker/` changes).
+
+`ndcctools` is baked into the image at build time rather than resolved
+from conda-forge on every pod start, so a worker pod is just scheduling +
+a (node-cached) image pull + `exec vine_worker`, with no dependency on
 conda-forge being reachable at pod start and no initContainer at all.
 Each submitted *task*'s own execution environment is a separate, later
 concern, unrelated to what this image provides: package it with
@@ -166,6 +206,69 @@ hub:
 with a `JUPYTERHUB_API_TOKEN`/`JUPYTERHUB_API_URL` pair injected into this
 service's own pod, and `TASKVINE_GATEWAY_ADDRESS` injected into singleuser
 pods for the snippet above.
+
+If z2jh's own `singleuser.networkPolicy.enabled` is `true` (the z2jh
+default), a worker pod's connection to the manager port
+(`TVG_MANAGER_PORT`, default `9123`) on the notebook pod is blocked
+unless something explicitly allows it - workers just never connect,
+with no error visible anywhere in this service. Add an ingress rule
+matching every worker pod's `app` label (`TVG_WORKER_APP_LABEL`,
+default `taskvine-worker`):
+
+```yaml
+singleuser:
+  networkPolicy:
+    ingress:
+      - from:
+          - podSelector:
+              matchLabels:
+                app: taskvine-worker
+        ports:
+          - port: 9123
+```
+
+## Username handling
+
+A caller is always identified by their raw Hub username (from the
+validated token, via `HubAuth`) - but that raw username is never used
+directly as a Kubernetes object name or label value, since it can
+contain characters neither allows (e.g. `jzhou24@nd.edu`). Instead it's
+escaped the same way KubeSpawner itself escapes it for its own
+`{username}`-templated resource names and its singleuser pod's
+`hub.jupyter.org/username` label (see `src/taskvine_gateway/slugs.py`,
+a thin wrapper around [`escapism`](https://github.com/jupyterhub/escapism) -
+the same package KubeSpawner uses).
+
+This has to match whatever that deployment's z2jh chart is actually
+configured with, via `TVG_USERNAME_SLUG_SCHEME` (`safe`, the default and
+KubeSpawner's own current default, or `escape`, KubeSpawner's older but
+still-supported scheme - check `hub.kubespawner.slug_scheme` in that
+chart's own values). Get this wrong and every name/label/mount path this
+service computes silently stops matching what KubeSpawner actually
+created - the manager Service's selector matches zero pods, a per-user
+PVC mount points at a PVC that doesn't exist, etc.
+
+## Required RBAC
+
+The gateway needs to create/read/update/delete `StatefulSet`s and
+`Service`s in its own namespace:
+
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: taskvine-gateway
+rules:
+  - apiGroups: ["apps"]
+    resources: ["statefulsets"]
+    verbs: ["get", "list", "create", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get", "create", "delete"]
+```
+
+bound to the `ServiceAccount` its `Deployment` runs as, via a matching
+`RoleBinding` in the same namespace.
 
 ## Running the server locally
 

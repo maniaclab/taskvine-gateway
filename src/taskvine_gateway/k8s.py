@@ -2,14 +2,25 @@ from kubernetes import client
 from kubernetes.client.rest import ApiException
 
 from .config import settings
+from .slugs import label_value_slug, object_name_slug
 
-# Every worker pod keeps `app: taskvine-worker` (in addition to the per-user
-# label below) so the existing singleuser NetworkPolicy - which allows
-# ingress to port 9123 from pods matching `app: taskvine-worker`
-# (clusters/*/infrastructure/jupyterhub/install/patch-taskvine.yaml) - keeps
-# working unmodified for gateway-created pools.
-WORKER_APP_LABEL = "taskvine-worker"
+# {username} in a naming/mount template is substituted with this - matches
+# KubeSpawner's own {username} template scheme exactly (safe_slug with
+# max_length=48, or escape_slug - see settings.username_slug_scheme), so a
+# PVC name or mount path built here lines up with whatever KubeSpawner's
+# own pre_spawn_hook (or extraVolumes/extraVolumeMounts {username}
+# templating) actually created for the same user.
+_OBJECT_NAME_SLUG_MAX_LENGTH = 48
+
+# Holds a k8s-safe slug of the caller's username (see slugs.py), not the
+# raw username itself - label values have their own character
+# restrictions a raw username can violate. The raw username is preserved
+# separately in USERNAME_ANNOTATION (annotations aren't restricted the
+# same way) for anything that needs to display or recompute names from
+# it - same split KubeSpawner itself uses for its own username label vs.
+# annotation.
 USER_LABEL = "taskvine-gateway/user"
+USERNAME_ANNOTATION = "taskvine-gateway/username"
 
 # Stamped onto every worker StatefulSet with the resolved (default or
 # per-pool-overridden) config it was created/last updated with - lets
@@ -47,23 +58,35 @@ class WorkspaceImmutableError(ValueError):
 
 
 def manager_service_name(username: str) -> str:
-    return settings.manager_service_name_template.format(username=username)
+    """`username` is always the caller's raw Hub username - the slug
+    substitution happens here, not at call sites, so this stays a pure
+    function of the raw username no matter where it's called from."""
+    slug = object_name_slug(username, _OBJECT_NAME_SLUG_MAX_LENGTH, settings.username_slug_scheme)
+    return settings.manager_service_name_template.format(username=slug)
 
 
 def worker_statefulset_name(username: str) -> str:
-    return settings.worker_statefulset_name_template.format(username=username)
+    """See manager_service_name - same rule, `username` is always raw."""
+    slug = object_name_slug(username, _OBJECT_NAME_SLUG_MAX_LENGTH, settings.username_slug_scheme)
+    return settings.worker_statefulset_name_template.format(username=slug)
 
 
 def _pvc_mount_volume_and_mount(mount, username: str) -> tuple[client.V1Volume, client.V1VolumeMount]:
+    # `username` is raw; slugged the same way KubeSpawner slugs its own
+    # {username} templates (e.g. in a pre_spawn_hook or
+    # extraVolumes/extraVolumeMounts), so a per-user claim_name_template/
+    # mount_path_template here resolves to the exact same PVC/path
+    # KubeSpawner already created for this user.
+    slug = object_name_slug(username, _OBJECT_NAME_SLUG_MAX_LENGTH, settings.username_slug_scheme)
     volume = client.V1Volume(
         name=mount.name,
         persistent_volume_claim=client.V1PersistentVolumeClaimVolumeSource(
-            claim_name=mount.claim_name_template.format(username=username)
+            claim_name=mount.claim_name_template.format(username=slug)
         ),
     )
     volume_mount = client.V1VolumeMount(
         name=mount.name,
-        mount_path=mount.mount_path_template.format(username=username),
+        mount_path=mount.mount_path_template.format(username=slug),
         read_only=mount.read_only,
     )
     return volume, volume_mount
@@ -80,10 +103,16 @@ def ensure_manager_service(api: client.CoreV1Api, username: str) -> None:
         if e.status != 404:
             raise
 
+    # The selector must match KubeSpawner's own hub.jupyter.org/username
+    # *label* value on the real notebook pod - which is a slug of the raw
+    # username (see slugs.py), not the raw username itself. Using the raw
+    # username here would silently select zero pods (or, for a username
+    # already invalid as a label value, fail Service creation outright).
+    username_label = label_value_slug(username, scheme=settings.username_slug_scheme)
     body = client.V1Service(
-        metadata=client.V1ObjectMeta(name=name, labels={USER_LABEL: username}),
+        metadata=client.V1ObjectMeta(name=name, labels={USER_LABEL: username_label}),
         spec=client.V1ServiceSpec(
-            selector={"hub.jupyter.org/username": username},
+            selector={"hub.jupyter.org/username": username_label},
             ports=[client.V1ServicePort(name="taskvine-manager", port=settings.manager_port, target_port=settings.manager_port)],
         ),
     )
@@ -166,11 +195,17 @@ def _worker_statefulset_body(
 ) -> client.V1StatefulSet:
     name = worker_statefulset_name(username)
     manager_host = f"{manager_service_name(username)}.{settings.namespace}.svc.cluster.local"
-    labels = {"app": WORKER_APP_LABEL, USER_LABEL: username}
+    # USER_LABEL holds a slug (see the comment on it) - USERNAME_ANNOTATION
+    # keeps the real raw username around for resolved_config/PoolStatus to
+    # display, and for the idle reaper to recompute names from (annotation
+    # values aren't restricted the way label values are, so the raw
+    # username - which can contain "@" etc - is safe to store as-is here).
+    labels = {"app": settings.worker_app_label, USER_LABEL: label_value_slug(username, scheme=settings.username_slug_scheme)}
     # workspace_kind is always the deployment's own setting - never a
     # per-request value, see ScaleRequest in models.py for why.
     workspace_kind = settings.worker_workspace_kind
     annotations = {
+        USERNAME_ANNOTATION: username,
         CORES_ANNOTATION: str(cores),
         MEMORY_MB_ANNOTATION: str(memory_mb),
         WORKSPACE_KIND_ANNOTATION: workspace_kind,
@@ -240,9 +275,9 @@ def _worker_statefulset_body(
     return client.V1StatefulSet(
         metadata=client.V1ObjectMeta(name=name, labels=labels, annotations=annotations),
         spec=client.V1StatefulSetSpec(
-            service_name=WORKER_APP_LABEL,
+            service_name=settings.worker_app_label,
             replicas=replicas,
-            selector=client.V1LabelSelector(match_labels={"app": WORKER_APP_LABEL, USER_LABEL: username}),
+            selector=client.V1LabelSelector(match_labels=labels),
             template=client.V1PodTemplateSpec(metadata=client.V1ObjectMeta(labels=labels), spec=pod_spec),
             volume_claim_templates=volume_claim_templates,
         ),
